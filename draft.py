@@ -1,43 +1,43 @@
-
-from prompt import SYSTEM
 import pandas as pd
-import re
-from io import StringIO
-from utils import send_messasge, ModelMessageDict
+import os
 
+# Загружаем spm_with_tm_columns
+spm_tm = pd.read_csv('/home/master/T_minus/T_m_log/spm_with_tm_columns.csv')
+print(f"spm_with_tm_columns: {len(spm_tm)} строк")
 
-def extract_csv(response: str, expected_cols: list) -> str | None:
-    # Обрезаем по </think>
-    if '</think>' in response:
-        response = response.split('</think>')[-1].strip()
+# Папка с T_p файлами
+tp_folder = '/home/master/T_minus/T_p'
 
-    # Убираем markdown
-    response = re.sub(r'```[a-z]*\n?', '', response).replace('```', '').strip()
+# Добавляем колонку с содержимым T_p файла
+tables = []
 
-    # Ищем заголовки
-    lines = response.split('\n')
-    for i, line in enumerate(lines):
-        if all(col.lower() in line.lower() for col in expected_cols[:2]):
-            return '\n'.join(lines[i:])
+for idx, row in spm_tm.iterrows():
+    file_id = row['id']
+    tp_file = os.path.join(tp_folder, f"{file_id}_positive.csv")
 
-    return response
+    if os.path.exists(tp_file):
+        # Читаем содержимое T_p файла как строку
+        with open(tp_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        tables.append(content)
+    else:
+        # Если файла нет, оставляем пустую строку (NOT NULL, а пустая строка)
+        tables.append("")
+        print(f"⚠️ Не найден файл для ID: {file_id}")
 
-print(extract_csv('''        Let me check: 
-          The string: "Resigned to accept position as Minister Plenipotentiary to Russia" -> no comma? 
+# Добавляем колонку с таблицей
+spm_tm['T_p_table'] = tables
 
-        So it's safe? 
+found_count = len([t for t in tables if t])
+print(f"✅ Найдено таблиц из T_p: {found_count} из {len(spm_tm)}")
 
-        Therefore, we output as above.
+# Сохраняем в TSV (разделитель табуляция)
+output_path = '/home/master/T_minus/T_m_log/spm_with_tm_columns_and_tp.tsv'
+spm_tm.to_csv(output_path, sep='\t', index=False, encoding='utf-8')
+print(f"\n📁 TSV файл сохранен: {output_path}")
 
-        We are done.
-</think>
-
-Unnamed: 0,Name,Took office,Left office,Party,Notes/Events
-11,William Pinkney,"March 4, 1803","March 3, 1805",Democratic Republican,
-12,Alexander McKim,"March 4, 1809","March 3, 1815",Democratic Republican,
-13,William Pinkney,"March 4, 1815","April 18, 1816",Democratic Republican,Resigned to accept position as Minister Plenipotentiary to Russia
-14,Peter Little,"September 2, 1816","March 3, 1823",Democratic Republican,
-14,Peter Little,"March 4, 1823","March 3, 1825",Jacksonian DR,
-14,Peter Little,"March 4, 1825","March 3, 1829",Adams,
-15,Benjamin C. Howard,"March 4, 1829","March 3, 1833",Jacksonian,
-''',['Name','Took office','Left office','Party,Notes/Events']))
+# Показываем пример
+print("\n📋 Пример первой строки:")
+print(f"id: {spm_tm.iloc[0]['id']}")
+print(f"columns: {spm_tm.iloc[0]['columns']}")
+print(f"T_p_table preview: {spm_tm.iloc[0]['T_p_table'][:100] if spm_tm.iloc[0]['T_p_table'] else 'EMPTY'}...")

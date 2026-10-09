@@ -1,51 +1,60 @@
 from prompt import SYSTEM
 import pandas as pd
-import re
-from io import StringIO
-from utils import send_messasge, ModelMessageDict
+from utils import send_messasge_async, ModelMessageDict
+import asyncio
 
 
-def extract_csv(response: str, expected_cols: list) -> str | None:
-    # Обрезаем по </think>
-    if '</think>' in response:
-        response = response.split('</think>')[-1].strip()
+def extract_columns_list(response: str):
+    """
+    Извлекает список имен колонок из ответа модели.
+    Ожидает формат: "Col1, Col2, Col3" или просто "Col1,Col2"
+    """
+    # Убираем markdown блоки если есть
+    if '```' in response:
+        response = response.split('```')[-1].strip()
 
-    # # Убираем markdown
-    # response = re.sub(r'```[a-z]*\n?', '', response).replace('```', '').strip()
-    #
-    # # Ищем заголовки
-    # lines = response.split('\n')
-    # for i, line in enumerate(lines):
-    #     if all(col.lower() in line.lower() for col in expected_cols[:2]):
-    #         return '\n'.join(lines[i:])
+    # Разбиваем по запятой, убираем пробелы и кавычки
+    cols = [c.strip().strip('"').strip("'") for c in response.split(',')]
+    return cols
 
-    return response
 
-def generate_t_minus(question, answer, tbl, max_rows=20):
+async def generate_t_minus(question, answer, tbl, max_rows=20):
     tbl_input = tbl.head(max_rows) if len(tbl) > max_rows else tbl
-    msg = ModelMessageDict(role='user')
-    msg.add_text_content(
-        f"QUESTION: {question}\nANSWER: {answer}\nTABLE:\n{tbl_input.to_string(index=False)}\nOUTPUT:"
+
+    # Получаем список колонок таблицы
+    available_columns = list(tbl_input.columns)
+
+    # Формируем сообщение пользователя с явным указанием доступных колонок
+    user_msg = ModelMessageDict(role='user')
+    user_msg.add_text_content(
+        f"QUESTION: {question}\n"
+        f"ANSWER: {answer}\n"
+        f"AVAILABLE COLUMNS: {', '.join(available_columns)}\n"
+        f"TABLE:\n{tbl_input.to_string(index=False)}"
     )
-    success, responses = send_messasge(
-        messages=[{"role": "system", "content": SYSTEM}, msg],
-        base_url="http://192.168.19.148:8888/v1",
-        #base_url="http://localhost:8880/v1",
+
+    success, responses = await send_messasge_async(
+        messages=[{"role": "system", "content": SYSTEM}, user_msg],
+        base_url="http://192.168.19.127:9886/v1",
         api_key='EMPTY',
-        model_name='Qwen/Qwen3-VL-32B-Thinking',
+        model_name='Qwen/Qwen3-4B-Instruct-2507',
         temperature=0.3,
     )
-    #print(responses[0])
+
     if not success:
         return None, f"LLM error: {responses}"
+
     response = responses[0]
-    csv_text = extract_csv(response, list(tbl_input.columns))
-    # t_minus = pd.read_csv(StringIO(csv_text))
-    # if list(t_minus.columns) != list(tbl_input.columns):
-    #     return None, "columns mismatch"
-    # if len(t_minus) != len(tbl_input):
-    #     return None, "rows mismatch"
-    # if tbl_input.equals(t_minus):
-    #     return None, "identical to original"
-    return csv_text, None
-    # return t_minus, None
+
+    # 1. Извлекаем список колонок из ответа
+    selected_cols = extract_columns_list(response)
+
+    # 2. Фильтруем: оставляем только те, что есть в оригинале
+    original_cols = set(tbl_input.columns)
+    valid_cols = [c for c in selected_cols if c in original_cols]
+
+    if not valid_cols:
+        return None, f"No valid columns found in response: {selected_cols}. Available: {list(original_cols)}"
+
+    # 3. Возвращаем список колонок
+    return valid_cols, None
